@@ -1,0 +1,131 @@
+import os
+import sys
+import shutil
+import zipfile
+import gzip
+import time
+from colorama import Fore, init
+
+init(autoreset=True)
+
+PIG_ART = r'''
+       (\____/)
+       / @__@  \ 
+      (  (oo)   )  
+       `-.~~.-'     
+        /    \      
+      @/      \_    
+     (/ /    \  \)  
+      WW`----'WW     
+'''
+
+BANNER = f'''
+{Fore.CYAN}  +---------------------------------------+
+  |               SNG SVINOTA             |
+  |                                       |
+  |   Скрипт для распаковки и переноса    |
+  |            демок КС2                  |
+  |           Made by Director            |
+  |           Telegram: @nevadalzt        |
+  +---------------------------------------+
+'''
+
+def show_banner():
+    print(Fore.GREEN + PIG_ART)
+    width = 40
+    for line in BANNER.split('\n'):
+        print(line)
+
+def read_config(config_path):
+    if os.path.exists(config_path):
+        with open(config_path, 'r') as f:
+            return f.readline().strip()
+    return None
+
+def save_config(config_path, dest_path):
+    with open(config_path, 'w') as f:
+        f.write(dest_path)
+    print(f"{Fore.YELLOW}📁 Путь сохранен: {dest_path}")
+
+def ask_for_path():
+    return input(f"{Fore.YELLOW}📂 Укажите путь для перемещения файлов: ").strip()
+
+def rename_file(file_path):
+    rename_choice = input(f"{Fore.YELLOW}🔄 Хотите переименовать файл? (Y/N): ").strip().lower()
+    if rename_choice == 'y':
+        new_name = input("✏️ Введите новое имя файла (без расширения): ").strip()
+        new_file_path = os.path.join(os.path.dirname(file_path), new_name + os.path.splitext(file_path)[1])
+        os.rename(file_path, new_file_path)
+        print(f"{Fore.GREEN}✅ Файл успешно переименован в {new_file_path}")
+        return new_file_path
+    return file_path
+
+def extract_archive(archive_path, dest_path):
+    print(f"{Fore.YELLOW}📦 Начинаю распаковку архива...")
+    if zipfile.is_zipfile(archive_path):
+        with zipfile.ZipFile(archive_path, 'r') as zip_ref:
+            zip_ref.extractall(dest_path)
+            print(f"{Fore.GREEN}✅ Архив успешно распакован!")
+    else:
+        print(f"{Fore.RED}❌ Файл не является архивом!")
+
+def extract_gz(gz_path, dest_path):
+    base_name = os.path.basename(gz_path).replace('.gz', '')
+    extracted_file_path = os.path.join(dest_path, base_name)
+    print(f"{Fore.YELLOW}📦 Начинаю распаковку сжатого файла...")
+    with gzip.open(gz_path, 'rb') as f_in:
+        with open(extracted_file_path, 'wb') as f_out:
+            shutil.copyfileobj(f_in, f_out)
+    print(f"{Fore.GREEN}✅ Файл успешно распакован!")
+    return extracted_file_path
+
+def process_file(file_path, config_path='config.txt'):
+    show_banner()
+    
+    dest_path = read_config(config_path)
+    
+    if not dest_path:
+        dest_path = ask_for_path()
+        save_config(config_path, dest_path)
+    
+    if not os.path.exists(dest_path):
+        os.makedirs(dest_path)
+    
+    if file_path.endswith('.zip'):
+        extract_archive(file_path, dest_path)
+        moved_file = os.path.basename(file_path)
+    elif file_path.endswith('.gz'):
+        extracted_file = extract_gz(file_path, dest_path)
+        moved_file = os.path.basename(extracted_file)
+        if extracted_file.endswith('.dem'):
+            print(f"{Fore.YELLOW}📂 Переношу файл...")
+            time.sleep(1)
+            shutil.move(extracted_file, os.path.join(dest_path, moved_file))
+            print(f"{Fore.GREEN}✅ Файл успешно перенесен!")
+        else:
+            print(f"{Fore.RED}❌ Файл распакован, но не поддерживается для дальнейшей обработки.")
+            return
+    elif file_path.endswith('.dem'):
+        print(f"{Fore.YELLOW}📂 Переношу файл...")
+        time.sleep(1)
+        shutil.move(file_path, os.path.join(dest_path, os.path.basename(file_path)))
+        moved_file = os.path.basename(file_path)
+        print(f"{Fore.GREEN}✅ Файл успешно перенесен!")
+    else:
+        print(f"{Fore.RED}❌ Файл не поддерживается!")
+        return
+
+    rename_file(os.path.join(dest_path, moved_file))
+
+    print("\n✅ Операция завершена! 🐷")
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        file_path = sys.argv[1]
+        
+        if os.path.exists(file_path):
+            process_file(file_path)
+        else:
+            print(f"{Fore.RED}❌ Файл не найден!")
+    else:
+        print(f"{Fore.RED}❌ Перетащите файл на скрипт для обработки.")
