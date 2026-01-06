@@ -1,9 +1,10 @@
-import os
-import sys
-import shutil
-import zipfile
+import argparse
 import gzip
+import os
+import shutil
+import sys
 import time
+import zipfile
 from colorama import Fore, init
 
 init(autoreset=True)
@@ -50,24 +51,40 @@ def save_config(config_path, dest_path):
 def ask_for_path():
     return input(f"{Fore.YELLOW}📂 Укажите путь для перемещения файлов: ").strip()
 
-def rename_file(file_path):
-    rename_choice = input(f"{Fore.YELLOW}🔄 Хотите переименовать файл? (Y/N): ").strip().lower()
-    if rename_choice == 'y':
-        new_name = input("✏️ Введите новое имя файла (без расширения): ").strip()
-        new_file_path = os.path.join(os.path.dirname(file_path), new_name + os.path.splitext(file_path)[1])
-        os.rename(file_path, new_file_path)
+def rename_file(file_path, rename_to=None, interactive=True, skip_prompt=False):
+    if not os.path.exists(file_path):
+        print(f"{Fore.RED}❌ Файл для переименования не найден: {file_path}")
+        return file_path
+
+    if rename_to is None:
+        if skip_prompt:
+            return file_path
+        rename_choice = input(f"{Fore.YELLOW}🔄 Хотите переименовать файл? (Y/N): ").strip().lower()
+        if rename_choice != 'y':
+            return file_path
+        rename_to = input("✏️ Введите новое имя файла (без расширения): ").strip()
+
+    if not rename_to:
+        return file_path
+
+    new_file_path = os.path.join(os.path.dirname(file_path), rename_to + os.path.splitext(file_path)[1])
+    os.rename(file_path, new_file_path)
+    if interactive:
         print(f"{Fore.GREEN}✅ Файл успешно переименован в {new_file_path}")
-        return new_file_path
-    return file_path
+    return new_file_path
 
 def extract_archive(archive_path, dest_path):
     print(f"{Fore.YELLOW}📦 Начинаю распаковку архива...")
     if zipfile.is_zipfile(archive_path):
         with zipfile.ZipFile(archive_path, 'r') as zip_ref:
+            members = zip_ref.namelist()
             zip_ref.extractall(dest_path)
             print(f"{Fore.GREEN}✅ Архив успешно распакован!")
+            extracted_files = [os.path.join(dest_path, name) for name in members if not name.endswith('/')]
+            return [os.path.abspath(path) for path in extracted_files]
     else:
         print(f"{Fore.RED}❌ Файл не является архивом!")
+    return []
 
 def extract_gz(gz_path, dest_path):
     base_name = os.path.basename(gz_path).replace('.gz', '')
@@ -79,53 +96,108 @@ def extract_gz(gz_path, dest_path):
     print(f"{Fore.GREEN}✅ Файл успешно распакован!")
     return extracted_file_path
 
-def process_file(file_path, config_path='config.txt'):
-    show_banner()
-    
-    dest_path = read_config(config_path)
-    
-    if not dest_path:
-        dest_path = ask_for_path()
-        save_config(config_path, dest_path)
-    
-    if not os.path.exists(dest_path):
-        os.makedirs(dest_path)
-    
-    if file_path.endswith('.zip'):
-        extract_archive(file_path, dest_path)
-        moved_file = os.path.basename(file_path)
-    elif file_path.endswith('.gz'):
-        extracted_file = extract_gz(file_path, dest_path)
-        moved_file = os.path.basename(extracted_file)
-        if extracted_file.endswith('.dem'):
-            print(f"{Fore.YELLOW}📂 Переношу файл...")
-            time.sleep(1)
-            shutil.move(extracted_file, os.path.join(dest_path, moved_file))
-            print(f"{Fore.GREEN}✅ Файл успешно перенесен!")
+def resolve_destination(dest_path, config_path, interactive, remember_dest):
+    chosen_path = dest_path or read_config(config_path)
+
+    if not chosen_path:
+        if not interactive:
+            raise ValueError("Не указан путь для перемещения файлов и отключен интерактивный режим")
+        chosen_path = ask_for_path()
+
+    os.makedirs(chosen_path, exist_ok=True)
+
+    if remember_dest:
+        save_config(config_path, chosen_path)
+
+    return chosen_path
+
+
+def move_file(file_path, dest_path):
+    print(f"{Fore.YELLOW}📂 Переношу файл...")
+    time.sleep(1)
+    final_path = shutil.move(file_path, os.path.join(dest_path, os.path.basename(file_path)))
+    print(f"{Fore.GREEN}✅ Файл успешно перенесен!")
+    return final_path
+
+
+def handle_extracted_dem_files(extracted_paths, dest_path, rename_to, interactive, skip_rename):
+    dem_files = sorted(path for path in extracted_paths if path.endswith('.dem'))
+    if not dem_files:
+        if interactive:
+            print(f"{Fore.YELLOW}ℹ️ В архиве нет .dem файлов для переименования.")
+        return
+
+    target_file = dem_files[0]
+    if len(dem_files) > 1 and rename_to is None:
+        if interactive and not skip_rename:
+            print(f"{Fore.YELLOW}ℹ️ Найдено несколько .dem файлов. Переименование пропущено без явного имени.")
+        return
+
+    rename_file(target_file, rename_to=rename_to, interactive=interactive, skip_prompt=skip_rename)
+
+
+def process_file(file_path, dest_path=None, config_path='config.txt', remember_dest=True, rename_to=None, interactive=True, skip_rename=False):
+    if interactive:
+        show_banner()
+
+    destination = resolve_destination(dest_path, config_path, interactive, remember_dest)
+
+    normalized_path = file_path.lower()
+
+    if normalized_path.endswith('.zip'):
+        extracted_files = extract_archive(file_path, destination)
+        handle_extracted_dem_files(extracted_files, destination, rename_to, interactive, skip_rename)
+    elif normalized_path.endswith('.gz'):
+        extracted_file = extract_gz(file_path, destination)
+        if extracted_file.lower().endswith('.dem'):
+            moved_path = move_file(extracted_file, destination)
+            rename_file(moved_path, rename_to=rename_to, interactive=interactive, skip_prompt=skip_rename)
         else:
             print(f"{Fore.RED}❌ Файл распакован, но не поддерживается для дальнейшей обработки.")
             return
-    elif file_path.endswith('.dem'):
-        print(f"{Fore.YELLOW}📂 Переношу файл...")
-        time.sleep(1)
-        shutil.move(file_path, os.path.join(dest_path, os.path.basename(file_path)))
-        moved_file = os.path.basename(file_path)
-        print(f"{Fore.GREEN}✅ Файл успешно перенесен!")
+    elif normalized_path.endswith('.dem'):
+        moved_file = move_file(file_path, destination)
+        rename_file(moved_file, rename_to=rename_to, interactive=interactive, skip_prompt=skip_rename)
     else:
         print(f"{Fore.RED}❌ Файл не поддерживается!")
         return
 
-    rename_file(os.path.join(dest_path, moved_file))
-
     print("\n✅ Операция завершена! 🐷")
 
+
+def parse_arguments():
+    parser = argparse.ArgumentParser(description="Распаковка и перенос демок CS2")
+    parser.add_argument("file_path", help="Путь к файлу (.zip, .gz или .dem)")
+    parser.add_argument("-d", "--dest", dest="dest_path", help="Путь для перемещения файлов")
+    parser.add_argument("-c", "--config", dest="config_path", default="config.txt", help="Путь к файлу конфигурации")
+    parser.add_argument("--no-save-dest", action="store_true", help="Не сохранять путь назначения в конфиг")
+    parser.add_argument("--rename", dest="rename_to", help="Новое имя файла (без расширения) для переименования без запроса")
+    parser.add_argument("--skip-rename", action="store_true", help="Пропустить шаг переименования")
+    parser.add_argument("--non-interactive", action="store_true", help="Запуск без интерактивных вопросов")
+    return parser.parse_args()
+
+
+def main():
+    args = parse_arguments()
+
+    if not os.path.exists(args.file_path):
+        print(f"{Fore.RED}❌ Файл не найден!")
+        sys.exit(1)
+
+    interactive = not args.non_interactive
+    try:
+        process_file(
+            file_path=args.file_path,
+            dest_path=args.dest_path,
+            config_path=args.config_path,
+            remember_dest=not args.no_save_dest,
+            rename_to=args.rename_to,
+            interactive=interactive,
+            skip_rename=args.skip_rename,
+        )
+    except ValueError as error:
+        print(f"{Fore.RED}❌ {error}")
+        sys.exit(1)
+
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        file_path = sys.argv[1]
-        
-        if os.path.exists(file_path):
-            process_file(file_path)
-        else:
-            print(f"{Fore.RED}❌ Файл не найден!")
-    else:
-        print(f"{Fore.RED}❌ Перетащите файл на скрипт для обработки.")
+    main()
